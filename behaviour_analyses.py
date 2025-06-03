@@ -75,13 +75,63 @@ def save_trained_outputs(date, run, index, use_old_scripts=True, base_path='../S
                                              params)
     return model
 
+class UniversalParams(dict):
+    """
+    A dict that also supports attribute access.
+    Works regardless of source type (dict, ConfigDict, TrackedDict, SimpleNamespace).
+    """
+    def __init__(self, source=None):
+        if source is None:
+            super().__init__()
+        elif isinstance(source, dict):
+            super().__init__(source)
+        elif isinstance(source, Mapping):
+            # Handles ConfigDict, TrackedDict, etc.
+            super().__init__(dict(source))
+        elif hasattr(source, '__dict__'):
+            # Handles SimpleNamespace, custom objects
+            super().__init__(vars(source))
+        else:
+            # Last resort: try to iterate
+            try:
+                super().__init__(dict(source))
+            except:
+                super().__init__()
+    
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
+    
+    def __setattr__(self, name, value):
+        self[name] = value
+    
+    def __delattr__(self, name):
+        try:
+            del self[name]
+        except KeyError:
+            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
+def load_params_robust(params_path):
+    """
+    Load parameters from .npy file in an environment-agnostic way.
+    Returns UniversalParams object that works everywhere.
+    """
+    try:
+        raw_params = np.load(params_path, allow_pickle=True).item()
+        return UniversalParams(raw_params)
+    except Exception as e:
+        print(f"Warning: Failed to load params from {params_path}: {e}")
+        return UniversalParams()
+    
 def get_model(model_path, script_path, save_path, index, use_old_scripts=True):
     """
     Load a trained model from a previous training run and save outputs
     """
     # Make sure there is a trained model for the requested index (training iteration)
     print("entering",model_path + '/tem_' + str(index) + '.index', script_path)
+    params_path = f"{save_path}/params.npy"
     if os.path.isfile(model_path + '/tem_' + str(index) + '.index'):
         model_path = model_path + '/tem_' + str(index)
         
@@ -110,42 +160,9 @@ def get_model(model_path, script_path, save_path, index, use_old_scripts=True):
         stored_model_utils = importlib.util.module_from_spec(spec_model_utils)
         spec_model_utils.loader.exec_module(stored_model_utils)
 
-        # ------------------------------------------------------------------
-        # 2 Load params.npy  → DotDict   (dot access **and** “in” / dict ops)
-        # ------------------------------------------------------------------
-        raw_params = np.load(save_path + "/params.npy", allow_pickle=True).item()
-        if not isinstance(raw_params, dict):
-            raw_params = dict(raw_params)            # flatten TrackedDict
-
-        Dot = stored_model_utils.DotDict             # <- project’s helper
-        params = Dot(raw_params)                     # ← KEEP this line
-                                                    #   (no SimpleNamespace)
-
-        # ------------------------------------------------------------------
-        # 3 Patch TEM.__init__ once so *anything* it replaces self.par with
-        #   is also a DotDict
-        # ------------------------------------------------------------------
-        def to_dot(obj):
-            if isinstance(obj, Dot):
-                return obj
-            try:                                     # dict-like?
-                return Dot(obj)
-            except Exception:
-                return Dot(vars(obj))               # SimpleNamespace or alike
-
-        def patch_tem(tem_mod):
-            orig_init = tem_mod.TEM.__init__
-
-            def new_init(self, par, *a, **kw):
-                par = to_dot(par)                   # entry
-                result = orig_init(self, par, *a, **kw)
-                self.par = to_dot(self.par)         # exit
-                return result
-
-            tem_mod.TEM.__init__ = new_init
-
-        patch_tem(stored_tem)
-
+        
+        params = load_params_robust(params_path)
+        
         # ------------------------------------------------------------------
         # 4 Instantiate and load weights
         # ------------------------------------------------------------------
