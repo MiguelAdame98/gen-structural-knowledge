@@ -119,8 +119,14 @@ def get_model(model_path, script_path, save_path, index, use_old_scripts=True):
         print("Loaded model_utils module.")
 
         print("Loading parameters...")
-        params = stored_model_utils.DotDict(np.load(save_path + '/params.npy', allow_pickle=True).item())
+        raw_params = np.load(save_path + '/params.npy', allow_pickle=True).item()
+
+        # If it's a ConfigDict/TrackedDict, flatten it to a normal dict
+        if not isinstance(raw_params, dict):
+            raw_params = dict(raw_params)          # shallow copy is enough
+        params = stored_model_utils.DotDict(raw_params)
         print("Parameters loaded.")
+
 
         print("Creating the model object...")
         model = stored_tem.TEM(params)
