@@ -19,6 +19,7 @@ linewidth = 4
 labelsize = 20
 
 
+
 def save_trained_outputs(date, run, index, use_old_scripts=True, base_path='../Summaries/', force_overwrite=False,
                          n_envs_save=6):
     """
@@ -118,12 +119,22 @@ def get_model(model_path, script_path, save_path, index, use_old_scripts=True):
         spec_model_utils.loader.exec_module(stored_model_utils)
         print("Loaded model_utils module.")
 
-        print("Loading parameters...")
+                # --- load raw_params exactly as you already do ----------------------------
         raw_params = np.load(save_path + '/params.npy', allow_pickle=True).item()
+        print("\n[DBG] raw_params initial type:", type(raw_params))
 
-        # If it's a ConfigDict/TrackedDict, flatten it to a normal dict
         if not isinstance(raw_params, dict):
-            raw_params = dict(raw_params)          # shallow copy is enough
+            raw_params = dict(raw_params)        # flatten ConfigDict / TrackedDict
+        print("[DBG] raw_params after cast :", type(raw_params))
+        print("[DBG] keys snapshot        :", list(raw_params)[:10])
+        print("[DBG] batch_size key?       :", 'batch_size' in raw_params)
+
+        # --- use *one* wrapper; DotDict or SimpleNamespace both fine --------------
+        from types import SimpleNamespace
+        params = SimpleNamespace(**raw_params)   # or stored_model_utils.DotDict(raw_params)
+
+        print("[DBG] params final type     :", type(params))
+        print("[DBG] params.batch_size     :", getattr(params, 'batch_size', None))
         params = stored_model_utils.DotDict(raw_params)
         print("Parameters loaded.")
 
