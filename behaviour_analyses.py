@@ -93,66 +93,72 @@ def get_model(model_path, script_path, save_path, index, use_old_scripts=True):
         # Return None to indicate error
         return None, None
     try:
-        print("Loading tem module...")
+        # ------------------------------------------------------------------
+        # 1 Import tem_model, data_utils, model_utils from *that* run folder
+        # ------------------------------------------------------------------
         spec_tem = importlib.util.spec_from_file_location(
-        "tem", script_path + '/tem_model.py'
-        ) if use_old_scripts else importlib.util.spec_from_file_location("tem", 'tem_model.py')
+            "tem", script_path + "/tem_model.py"
+        ) if use_old_scripts else importlib.util.spec_from_file_location(
+            "tem", "tem_model.py"
+        )
         stored_tem = importlib.util.module_from_spec(spec_tem)
-        print("About to execute tem_model.py",spec_tem,stored_tem)
         spec_tem.loader.exec_module(stored_tem)
-        print("Loaded tem module.")
 
-
-        print("Loading data_utils module...")
-        spec_data_utils = importlib.util.spec_from_file_location(
-            "data_utils", script_path + '/data_utils.py'
-        ) if use_old_scripts else importlib.util.spec_from_file_location("data_utils", 'data_utils.py')
-        stored_data_utils = importlib.util.module_from_spec(spec_data_utils)
-        spec_data_utils.loader.exec_module(stored_data_utils)
-        print("Loaded data_utils module.")
-
-        print("Loading model_utils module...")
         spec_model_utils = importlib.util.spec_from_file_location(
-            "model_utils", script_path + '/model_utils.py'
-        ) if use_old_scripts else importlib.util.spec_from_file_location("model_utils", 'model_utils.py')
+            "model_utils", script_path + "/model_utils.py"
+        )
         stored_model_utils = importlib.util.module_from_spec(spec_model_utils)
         spec_model_utils.loader.exec_module(stored_model_utils)
-        print("Loaded model_utils module.")
 
-                # --- load raw_params exactly as you already do ----------------------------
-        raw_params = np.load(save_path + '/params.npy', allow_pickle=True).item()
-        print("\n[DBG] raw_params initial type:", type(raw_params))
-
+        # ------------------------------------------------------------------
+        # 2 Load params.npy  → DotDict   (dot access **and** “in” / dict ops)
+        # ------------------------------------------------------------------
+        raw_params = np.load(save_path + "/params.npy", allow_pickle=True).item()
         if not isinstance(raw_params, dict):
-            raw_params = dict(raw_params)        # flatten ConfigDict / TrackedDict
-        print("[DBG] raw_params after cast :", type(raw_params))
-        print("[DBG] keys snapshot        :", list(raw_params)[:10])
-        print("[DBG] batch_size key?       :", 'batch_size' in raw_params)
+            raw_params = dict(raw_params)            # flatten TrackedDict
 
-        # --- use *one* wrapper; DotDict or SimpleNamespace both fine --------------
-        from types import SimpleNamespace
-        params = SimpleNamespace(**raw_params)   # or stored_model_utils.DotDict(raw_params)
+        Dot = stored_model_utils.DotDict             # <- project’s helper
+        params = Dot(raw_params)                     # ← KEEP this line
+                                                    #   (no SimpleNamespace)
 
-        print("[DBG] params final type     :", type(params))
-        print("[DBG] params.batch_size     :", getattr(params, 'batch_size', None))
-        params = stored_model_utils.DotDict(raw_params)
-        print("Parameters loaded.")
+        # ------------------------------------------------------------------
+        # 3 Patch TEM.__init__ once so *anything* it replaces self.par with
+        #   is also a DotDict
+        # ------------------------------------------------------------------
+        def to_dot(obj):
+            if isinstance(obj, Dot):
+                return obj
+            try:                                     # dict-like?
+                return Dot(obj)
+            except Exception:
+                return Dot(vars(obj))               # SimpleNamespace or alike
 
+        def patch_tem(tem_mod):
+            orig_init = tem_mod.TEM.__init__
 
-        print("Creating the model object...")
+            def new_init(self, par, *a, **kw):
+                par = to_dot(par)                   # entry
+                result = orig_init(self, par, *a, **kw)
+                self.par = to_dot(self.par)         # exit
+                return result
+
+            tem_mod.TEM.__init__ = new_init
+
+        patch_tem(stored_tem)
+
+        # ------------------------------------------------------------------
+        # 4 Instantiate and load weights
+        # ------------------------------------------------------------------
         model = stored_tem.TEM(params)
-        print("Model object created.")
-
-        print("Loading model weights from", model_path, "...")
         model.load_weights(model_path)
-        print("Model weights loaded.")
 
-        # Return loaded and trained model
         return model, params
 
-    except ModuleNotFoundError as e:
-        print('Model not found', e)
-        return None, stored_model_utils.DotDict(np.load(save_path + '/params.npy', allow_pickle=True).item())
+    except Exception as e:
+        print("‼️  get_model failed:", e)
+        raise
+         
+
 
 
 
